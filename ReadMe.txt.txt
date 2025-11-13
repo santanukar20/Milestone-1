@@ -1,1 +1,0 @@
-This is for Mutual Fund Chatbot (RAG)
