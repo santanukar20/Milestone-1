@@ -1,12 +1,14 @@
 """
 Production-grade data extraction script for Mutual Fund FAQ RAG chatbot.
-Scrapes factual data from AMC HTML pages and stores it in structured format.
+Scrapes factual data from Groww.in pages and stores it in structured format.
 """
 
 import json
 import logging
 import re
 import time
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -23,16 +25,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Allowed AMC domains (easily extensible)
+# Allowed domains
 ALLOWED_DOMAINS: Set[str] = {
+    'hdfcfund.com',
     'www.hdfcfund.com',
-    # Add more AMC domains here as needed:
-    # 'www.sbimf.com',
 }
 
 # User-Agent to avoid blocking
 DEFAULT_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1'
 }
 
 # Session for connection pooling
@@ -94,8 +100,6 @@ def fetch_html(url: str, timeout: int = 30, max_retries: int = 3) -> Optional[st
         logger.error(f"FAIL {url} - Domain not in allowed list")
         return None
     
-    last_exception = None
-    
     for attempt in range(max_retries):
         try:
             # Exponential backoff: wait 2^attempt seconds before retry
@@ -104,13 +108,14 @@ def fetch_html(url: str, timeout: int = 30, max_retries: int = 3) -> Optional[st
                 logger.info(f"Retry {attempt}/{max_retries-1} for {url} after {wait_time}s")
                 time.sleep(wait_time)
             
-            # Disallow redirects to non-whitelisted domains
+            # Fetch with requests
             response = session.get(
                 url,
                 timeout=timeout,
                 allow_redirects=True,
-                stream=False,  # Don't stream to check content-type early
-                hooks={'response': redirect_hook}
+                stream=False,
+                hooks={'response': redirect_hook},
+                verify=False,
             )
             
             # Double-check final URL after redirects
@@ -130,7 +135,6 @@ def fetch_html(url: str, timeout: int = 30, max_retries: int = 3) -> Optional[st
                 logger.error(f"FAIL {url} - Content-Type is PDF, not HTML")
                 return None
             
-            # Ignore images and JS
             if any(x in content_type for x in ['image/', 'javascript', 'application/javascript']):
                 logger.error(f"FAIL {url} - Content-Type is {content_type}, not HTML")
                 return None
@@ -141,7 +145,6 @@ def fetch_html(url: str, timeout: int = 30, max_retries: int = 3) -> Optional[st
             return response.text
             
         except requests.exceptions.Timeout as e:
-            last_exception = e
             if attempt < max_retries - 1:
                 logger.warning(f"Timeout on attempt {attempt + 1}/{max_retries} for {url}")
                 continue
@@ -149,7 +152,6 @@ def fetch_html(url: str, timeout: int = 30, max_retries: int = 3) -> Optional[st
             return None
             
         except requests.exceptions.RequestException as e:
-            last_exception = e
             if attempt < max_retries - 1:
                 logger.warning(f"Network error on attempt {attempt + 1}/{max_retries} for {url}: {e}")
                 continue
@@ -157,35 +159,71 @@ def fetch_html(url: str, timeout: int = 30, max_retries: int = 3) -> Optional[st
             return None
             
         except Exception as e:
-            last_exception = e
             logger.error(f"FAIL {url} - Unexpected error: {e}")
             return None
     
     return None
 
 
-def extract_visible_text(soup: BeautifulSoup) -> str:
+def extract_text_by_label(soup: BeautifulSoup, label: str) -> Optional[str]:
     """
-    Extract all visible text from the HTML, cleaned and normalized.
+    Extract text value by searching for a label in the page.
     
     Args:
         soup: BeautifulSoup parsed HTML
+        label: Label text to search for
         
     Returns:
-        Clean visible text as a single string
+        Extracted text value or None
     """
-    # Remove script and style elements
-    for script in soup(["script", "style", "noscript"]):
-        script.decompose()
+    # Try to find the label and get adjacent text
+    for element in soup.find_all(text=re.compile(re.escape(label), re.IGNORECASE)):
+        if element.parent:
+            # Try next sibling
+            next_elem = element.parent.find_next_sibling()
+            if next_elem:
+                text = next_elem.get_text(strip=True)
+                if text:
+                    return text
+            
+            # Try parent's next sibling
+            parent = element.parent
+            if parent and parent.parent:
+                next_parent = parent.find_next_sibling()
+                if next_parent:
+                    text = next_parent.get_text(strip=True)
+                    if text:
+                        return text
     
-    # Get text
-    text = soup.get_text(separator=' ', strip=True)
+    return None
+
+
+def extract_number_from_text(text: str) -> Optional[float]:
+    """
+    Extract number from text, handling Indian number format.
     
-    # Normalize whitespace
-    text = re.sub(r'\s+', ' ', text)
-    text = text.strip()
+    Args:
+        text: Text containing number
+        
+    Returns:
+        Extracted number as float or None
+    """
+    if not text:
+        return None
     
-    return text
+    # Remove common symbols and text
+    clean = re.sub(r'[₹,\s%]', '', text)
+    clean = clean.replace('Cr', '').replace('cr', '')
+    
+    # Extract number
+    match = re.search(r'-?\d+\.?\d*', clean)
+    if match:
+        try:
+            return float(match.group())
+        except ValueError:
+            return None
+    
+    return None
 
 
 def find_section_text(soup: BeautifulSoup, labels: List[str], case_sensitive: bool = False) -> Optional[str]:
@@ -242,10 +280,12 @@ def find_section_text(soup: BeautifulSoup, labels: List[str], case_sensitive: bo
                         return text
         
         # Method 2: Look for label followed by colon or in text
+        flags = re.DOTALL
+        if not case_sensitive:
+            flags |= re.IGNORECASE
         pattern = re.compile(
             re.escape(label) + r'[:.]?\s*(.+?)(?:\n\n|\n\s*[A-Z][a-z]+[:.]|$)',
-            re.IGNORECASE if not case_sensitive else 0,
-            re.DOTALL
+            flags
         )
         match = pattern.search(text_content)
         if match:
@@ -312,10 +352,12 @@ def find_all_section_text(soup: BeautifulSoup, labels: List[str], case_sensitive
                         results.append(text)
         
         # Also search in text patterns
+        flags = re.DOTALL
+        if not case_sensitive:
+            flags |= re.IGNORECASE
         pattern = re.compile(
             re.escape(label) + r'[:.]?\s*(.+?)(?:\n\n|\n\s*[A-Z][a-z]+[:.]|$)',
-            re.IGNORECASE if not case_sensitive else 0,
-            re.DOTALL
+            flags
         )
         matches = pattern.finditer(text_content)
         for match in matches:
@@ -516,37 +558,209 @@ def extract_pdf_links(soup: BeautifulSoup) -> List[str]:
     return pdf_links
 
 
-def parse_scheme_page(html: str, url: str) -> Dict:
+def parse_groww_scheme_page(html: str, url: str) -> Dict:
     """
-    Parse a scheme page HTML and extract structured data.
+    Parse a Groww mutual fund scheme page and extract structured data.
     
     Args:
         html: Raw HTML content
         url: Source URL
         
     Returns:
-        Dictionary with all extracted data
+        Dictionary with all extracted fund data
     """
     soup = BeautifulSoup(html, 'html.parser')
     
-    # Extract page title as fallback scheme name
-    title_tag = soup.find('title')
-    scheme_name = title_tag.get_text(strip=True) if title_tag else "Unknown Scheme"
-    
-    # Extract visible text
-    text_clean = extract_visible_text(soup)
-    
-    # Extract structured sections
-    sections = extract_sections(soup)
-    
-    # Build record
+    # Initialize record with all fields
     record = {
-        "scheme_name": scheme_name,
+        "scheme_name": None,
+        "amc_name": "HDFC Asset Management Company Limited",
+        "category": None,
+        "plan_type": None,
+        "option": None,
+        "risk_level": None,
+        "fund_rating": None,
+        
+        "nav_date": None,
+        "nav_value": None,
+        "fund_size_cr": None,
+        
+        "min_lumpsum_first_investment": None,
+        "min_lumpsum_additional": None,
+        "min_sip_amount": None,
+        
+        "returns_1y_percent": None,
+        "returns_3y_percent": None,
+        "returns_5y_percent": None,
+        "returns_all_percent": None,
+        
+        "category_avg_1y_percent": None,
+        "category_avg_3y_percent": None,
+        "category_avg_5y_percent": None,
+        "category_avg_all_percent": None,
+        
+        "rank_within_category_1y": None,
+        "rank_within_category_3y": None,
+        "rank_within_category_5y": None,
+        "rank_within_category_all": None,
+        
+        "top_5_holdings_weight_percent": None,
+        "top_20_holdings_weight_percent": None,
+        "pe_ratio": None,
+        "pb_ratio": None,
+        
+        "alpha": None,
+        "beta": None,
+        "sharpe_ratio": None,
+        "sortino_ratio": None,
+        
+        "expense_ratio_percent": None,
+        "expense_ratio_inclusive_of_gst": True,
+        "exit_load_text": None,
+        "stamp_duty_text": None,
+        "tax_implication_text": None,
+        
+        "fund_manager_name": None,
+        "fund_manager_since": None,
+        "fund_manager_tenure_text": None,
+        
         "source_url": url,
-        "text_clean": text_clean,  # Removed html_raw as per requirements (only store clean text)
-        "sections": sections,
         "last_scraped_at": datetime.now(timezone.utc).isoformat()
     }
+    
+    # Extract scheme name from h1 or title
+    h1 = soup.find('h1')
+    if h1:
+        record["scheme_name"] = h1.get_text(strip=True)
+    else:
+        title = soup.find('title')
+        if title:
+            record["scheme_name"] = title.get_text(strip=True).strip()
+    
+    # Extract all visible text for full context
+    text_all = soup.get_text(separator=' ', strip=True)
+    
+    # Extract NAV (will be None if page shows NA on HDFC pages)
+    # Skip NAV extraction for HDFC as pages show "NA"
+    # nav_match = re.search(r'NAV.*?₹\s*([\d,]+\.\d+)', text_all)
+    # if nav_match:
+    #     record["nav_value"] = extract_number_from_text(nav_match.group(1))
+    
+    # Extract Fund Size / AUM
+    size_match = re.search(r'(?:Fund Size|AUM|Assets Under Management).*?₹\s*([\d,]+(?:\.\d+)?\s*Cr)', text_all, re.IGNORECASE)
+    if size_match:
+        record["fund_size_cr"] = extract_number_from_text(size_match.group(1))
+    
+    # Extract Risk Level (prefer structured section near Riskometer)
+    risk_text = find_section_text(soup, ['Riskometer', 'Risk Level', 'Risk'])
+    if risk_text:
+        m = re.search(r'(Very High|High|Moderately High|Moderate|Low)', risk_text, re.IGNORECASE)
+        if m:
+            record["risk_level"] = m.group(1)
+    else:
+        risk_match = re.search(r'(Very High|High|Moderately High|Moderate|Low)', text_all, re.IGNORECASE)
+        if risk_match:
+            record["risk_level"] = risk_match.group(1)
+    
+    # Extract Category (fallback to Equity if shown near header)
+    category_text = find_section_text(soup, ['Category', 'Fund Category', 'Scheme Category', 'Fund Type', 'Scheme Type'])
+    if not category_text:
+        cat_tag = soup.find(lambda tag: tag.name in ['span', 'div', 'p'] and 'Equity' in tag.get_text())
+        if cat_tag:
+            category_text = 'Equity'
+    if category_text:
+        record["category"] = category_text.strip()
+    
+    # Extract Returns (1Y, 3Y, 5Y)
+    returns_1y = re.search(r'1Y.*?([\d.]+)%', text_all)
+    if returns_1y:
+        record["returns_1y_percent"] = extract_number_from_text(returns_1y.group(1))
+    
+    returns_3y = re.search(r'3Y.*?([\d.]+)%', text_all)
+    if returns_3y:
+        record["returns_3y_percent"] = extract_number_from_text(returns_3y.group(1))
+    
+    returns_5y = re.search(r'5Y.*?([\d.]+)%', text_all)
+    if returns_5y:
+        record["returns_5y_percent"] = extract_number_from_text(returns_5y.group(1))
+    
+    # Extract Returns since inception
+    since_inception = re.search(r'Returns\s+since\s+inception\s*([\d.]+)%', text_all, re.IGNORECASE)
+    if since_inception:
+        record["returns_all_percent"] = extract_number_from_text(since_inception.group(1))
+    
+    # Extract Expense Ratio / TER (HDFC shows TER value before "Lock in" or "NAV")
+    # TER appears as "TER ... 0.67" (single decimal place usually)
+    ter_match = re.search(r'TER.*?Disclaimer.*?(0\.\d+|1\.\d+)', text_all, re.IGNORECASE)
+    if ter_match:
+        record["expense_ratio_percent"] = extract_number_from_text(ter_match.group(1))
+    else:
+        # Fallback to generic expense ratio pattern
+        expense_match = re.search(r'(?:Expense Ratio|Total Expense Ratio).*?([\d.]+)%?', text_all, re.IGNORECASE)
+        if expense_match:
+            record["expense_ratio_percent"] = extract_number_from_text(expense_match.group(1))
+    
+    # Extract Exit Load from Downloads/Exit Load section
+    exit_match = re.search(r'Exit Load\s+(.*?)(?:Product Labelling|Benchmark Riskometer|###|FAQs)', text_all, re.IGNORECASE | re.DOTALL)
+    if exit_match:
+        exit_text = exit_match.group(1).strip()
+        # Clean up and limit to reasonable length
+        exit_text = re.sub(r'\s+', ' ', exit_text)
+        if len(exit_text) > 500:
+            exit_text = exit_text[:500]
+        record["exit_load_text"] = exit_text
+    
+    # Extract Minimum SIP (handle "Min SIP")
+    sip_match = re.search(r'(?:Minimum SIP|Min SIP).*?₹\s*([\d,]+)', text_all, re.IGNORECASE)
+    if sip_match:
+        record["min_sip_amount"] = extract_number_from_text(sip_match.group(1))
+    
+    # Extract Minimum Lumpsum
+    lump_match = re.search(r'Minimum (?:Lumpsum|Investment).*?₹\s*([\d,]+)', text_all, re.IGNORECASE)
+    if lump_match:
+        record["min_lumpsum_first_investment"] = extract_number_from_text(lump_match.group(1))
+    
+    # Extract Fund Managers from "Fund Managers" section
+    fm_match = re.search(r'Fund Managers?\s+((?:[A-Z][a-z]+\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?.*?)+?)(?:Top 10 Holdings|Downloads|##)', text_all, re.DOTALL)
+    if fm_match:
+        fm_text = fm_match.group(1).strip()
+        # Extract just names (Ms./Mr. followed by name)
+        names = re.findall(r'(?:Ms\.|Mr\.|Mrs\.)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', fm_text)
+        if names:
+            record["fund_manager_name"] = ', '.join(names[:5])
+        else:
+            # Fallback: extract capitalized names
+            names = re.findall(r'([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', fm_text)
+            if names:
+                record["fund_manager_name"] = ', '.join(names[:5])
+    
+    # Extract Ratios
+    pe_match = re.search(r'P/E Ratio.*?([\d.]+)', text_all, re.IGNORECASE)
+    if pe_match:
+        record["pe_ratio"] = extract_number_from_text(pe_match.group(1))
+    
+    pb_match = re.search(r'P/B Ratio.*?([\d.]+)', text_all, re.IGNORECASE)
+    if pb_match:
+        record["pb_ratio"] = extract_number_from_text(pb_match.group(1))
+    
+    alpha_match = re.search(r'Alpha.*?([\d.]+)', text_all, re.IGNORECASE)
+    if alpha_match:
+        record["alpha"] = extract_number_from_text(alpha_match.group(1))
+    
+    beta_match = re.search(r'Beta.*?([\d.]+)', text_all, re.IGNORECASE)
+    if beta_match:
+        record["beta"] = extract_number_from_text(beta_match.group(1))
+    
+    sharpe_match = re.search(r'Sharpe.*?([\d.]+)', text_all, re.IGNORECASE)
+    if sharpe_match:
+        record["sharpe_ratio"] = extract_number_from_text(sharpe_match.group(1))
+    
+    # Detect plan type and option from URL and name
+    if 'direct' in url.lower() or 'direct' in str(record["scheme_name"]).lower():
+        record["plan_type"] = "Direct"
+    
+    if 'growth' in url.lower() or 'growth' in str(record["scheme_name"]).lower():
+        record["option"] = "Growth"
     
     return record
 
@@ -631,8 +845,14 @@ def scrape_scheme_urls(urls: List[str], output_path: str = "data/raw_scheme_page
         
         # Parse page
         try:
-            record = parse_scheme_page(html, url)
+            record = parse_groww_scheme_page(html, url)
             new_records.append(record)
+            logger.info(
+                f"Extracted | scheme={record.get('scheme_name')} | AUM={record.get('fund_size_cr')} Cr | "
+                f"TER={record.get('expense_ratio_percent')}% | SIP={record.get('min_sip_amount')} | "
+                f"ExitLoad={'Y' if record.get('exit_load_text') else 'N'} | Risk={record.get('risk_level')} | "
+                f"Managers={record.get('fund_manager_name')} | SinceInc={record.get('returns_all_percent')}%"
+            )
             logger.info(f"SUCCESS {url}")
             stats['succeeded'] += 1
         except Exception as e:
@@ -660,28 +880,13 @@ def scrape_scheme_urls(urls: List[str], output_path: str = "data/raw_scheme_page
 
 
 if __name__ == "__main__":
-    # List of HDFC Mutual Fund Equity Scheme URLs
+    # List of HDFC AMC scheme URLs
     scheme_urls = [
         "https://www.hdfcfund.com/explore/mutual-funds/hdfc-flexi-cap-fund/direct",
         "https://www.hdfcfund.com/explore/mutual-funds/hdfc-balanced-advantage-fund/direct",
         "https://www.hdfcfund.com/explore/mutual-funds/hdfc-large-cap-fund/direct",
         "https://www.hdfcfund.com/explore/mutual-funds/hdfc-mid-cap-fund/direct",
         "https://www.hdfcfund.com/explore/mutual-funds/hdfc-small-cap-fund/direct",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty-50-index-fund/direct",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty-50-exchange-traded-fund/regular",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-bse-sensex-index-fund/direct",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty-next-50-exchange-traded-fund/regular",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty-next-50-index-fund/direct",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty-100-exchange-traded-fund/regular",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty-100-index-fund/direct",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty-midcap-150-index-fund/direct",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty-midcap-150-etf/regular",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty-smallcap-250-index-fund/direct",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty-smallcap-250-etf/regular",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-bse-500-index-fund/direct",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-bse-500-etf/regular",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty-bank-exchange-traded-fund/regular",
-        "https://www.hdfcfund.com/explore/mutual-funds/hdfc-nifty50-equal-weight-index-fund/direct",
     ]
     
     # Run scraper

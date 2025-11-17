@@ -397,7 +397,7 @@ def load_raw_records(path: str) -> List[Dict]:
 
 def generate_chunks_for_record(record: Dict) -> List[Dict]:
     """
-    Generate chunks for a single record.
+    Generate chunks for a single record from structured fields.
     
     Args:
         record: Single record dictionary from raw_scheme_pages.jsonl
@@ -409,131 +409,115 @@ def generate_chunks_for_record(record: Dict) -> List[Dict]:
     
     # Extract record fields
     scheme_name = record.get('scheme_name', 'Unknown Scheme')
+    amc_name = record.get('amc_name', '')
     source_url = record.get('source_url', '')
-    text_clean = record.get('text_clean', '')
-    sections = record.get('sections', {})
     last_scraped_at = record.get('last_scraped_at', '')
     
-    # Normalize text_clean
-    text_clean = normalize_whitespace(text_clean)
+    # Build comprehensive text chunks from structured data
+    chunk_texts = []
     
-    # Step 1: Create chunks from non-empty sections
+    # Chunk 1: Basic Information
+    basic_info_parts = [f"Scheme: {scheme_name}"]
+    if amc_name:
+        basic_info_parts.append(f"AMC: {amc_name}")
+    if record.get('category'):
+        basic_info_parts.append(f"Category: {record['category']}")
+    if record.get('plan_type'):
+        basic_info_parts.append(f"Plan Type: {record['plan_type']}")
+    if record.get('option'):
+        basic_info_parts.append(f"Option: {record['option']}")
+    if record.get('risk_level'):
+        basic_info_parts.append(f"Risk Level: {record['risk_level']}")
+    
+    if len(basic_info_parts) > 1:
+        chunk_texts.append('. '.join(basic_info_parts) + '.')
+    
+    # Chunk 2: Fund Size and NAV
+    fund_info_parts = []
+    if record.get('fund_size_cr'):
+        fund_info_parts.append(f"Fund Size (AUM): ₹{record['fund_size_cr']} Crore")
+    if record.get('nav_value'):
+        fund_info_parts.append(f"NAV: ₹{record['nav_value']}")
+    if record.get('nav_date'):
+        fund_info_parts.append(f"NAV Date: {record['nav_date']}")
+    
+    if fund_info_parts:
+        chunk_texts.append(f"{scheme_name} - " + '. '.join(fund_info_parts) + '.')
+    
+    # Chunk 3: Investment Minimums
+    investment_parts = []
+    if record.get('min_sip_amount'):
+        investment_parts.append(f"Minimum SIP: ₹{record['min_sip_amount']}")
+    if record.get('min_lumpsum_first_investment'):
+        investment_parts.append(f"Minimum Lumpsum Investment: ₹{record['min_lumpsum_first_investment']}")
+    if record.get('min_lumpsum_additional'):
+        investment_parts.append(f"Minimum Additional Investment: ₹{record['min_lumpsum_additional']}")
+    
+    if investment_parts:
+        chunk_texts.append(f"{scheme_name} - " + '. '.join(investment_parts) + '.')
+    
+    # Chunk 4: Returns
+    returns_parts = []
+    if record.get('returns_1y_percent') is not None:
+        returns_parts.append(f"1 Year Return: {record['returns_1y_percent']}%")
+    if record.get('returns_3y_percent') is not None:
+        returns_parts.append(f"3 Year Return: {record['returns_3y_percent']}%")
+    if record.get('returns_5y_percent') is not None:
+        returns_parts.append(f"5 Year Return: {record['returns_5y_percent']}%")
+    if record.get('returns_all_percent') is not None:
+        returns_parts.append(f"Returns Since Inception: {record['returns_all_percent']}%")
+    
+    if returns_parts:
+        chunk_texts.append(f"{scheme_name} - " + '. '.join(returns_parts) + '.')
+    
+    # Chunk 5: Fees and Charges
+    fees_parts = []
+    if record.get('expense_ratio_percent') is not None:
+        fees_parts.append(f"Expense Ratio (TER): {record['expense_ratio_percent']}%")
+    if record.get('exit_load_text'):
+        exit_load = record['exit_load_text'][:200]  # Limit length
+        fees_parts.append(f"Exit Load: {exit_load}")
+    if record.get('stamp_duty_text'):
+        fees_parts.append(f"Stamp Duty: {record['stamp_duty_text'][:100]}")
+    
+    if fees_parts:
+        chunk_texts.append(f"{scheme_name} - " + '. '.join(fees_parts) + '.')
+    
+    # Chunk 6: Fund Manager
+    if record.get('fund_manager_name'):
+        fm_text = f"{scheme_name} - Fund Manager: {record['fund_manager_name']}"
+        if record.get('fund_manager_since'):
+            fm_text += f". Managing since: {record['fund_manager_since']}"
+        chunk_texts.append(fm_text + '.')
+    
+    # Chunk 7: Ratios and Metrics
+    ratios_parts = []
+    if record.get('pe_ratio') is not None:
+        ratios_parts.append(f"P/E Ratio: {record['pe_ratio']}")
+    if record.get('pb_ratio') is not None:
+        ratios_parts.append(f"P/B Ratio: {record['pb_ratio']}")
+    if record.get('alpha') is not None:
+        ratios_parts.append(f"Alpha: {record['alpha']}")
+    if record.get('beta') is not None:
+        ratios_parts.append(f"Beta: {record['beta']}")
+    if record.get('sharpe_ratio') is not None:
+        ratios_parts.append(f"Sharpe Ratio: {record['sharpe_ratio']}")
+    
+    if ratios_parts:
+        chunk_texts.append(f"{scheme_name} - " + '. '.join(ratios_parts) + '.')
+    
+    # Create chunk dictionaries
     chunk_index = 1
-    
-    for section_key, section_value in sections.items():
-        # Skip factual_text_blocks (handled separately)
-        if section_key == 'factual_text_blocks':
-            continue
-            
-        if section_value and section_value.strip():
-            # Clean repetition and normalize
-            section_text = clean_repetition(str(section_value))
-            section_text = normalize_whitespace(section_text)
-            
-            # Skip if section text is too short (likely not meaningful)
-            if len(section_text) < 10:
-                continue
-            
-            chunk_id = generate_chunk_id(scheme_name, section_key, chunk_index)
-            chunk_index += 1
-            
-            chunk = {
-                'chunk_id': chunk_id,
-                'scheme_name': scheme_name,
-                'section': section_key,
-                'text': section_text,
-                'source_url': source_url,
-                'last_scraped_at': last_scraped_at
-            }
-            
-            chunks.append(chunk)
-    
-    # Step 2: Process factual_text_blocks if present
-    factual_blocks = sections.get('factual_text_blocks')
-    if factual_blocks and isinstance(factual_blocks, list):
-        for block in factual_blocks:
-            if block and isinstance(block, str):
-                block_text = clean_repetition(block)
-                block_text = normalize_whitespace(block_text)
-                
-                if block_text and len(block_text) >= 20:
-                    # Check if block should be chunked (if too long)
-                    estimated_tokens = estimate_tokens(block_text)
-                    if estimated_tokens > 300:  # Split if exceeds max tokens
-                        block_chunks = chunk_text_by_tokens(block_text)
-                        for block_chunk in block_chunks:
-                            if block_chunk and block_chunk.strip():
-                                chunk_id = generate_chunk_id(scheme_name, 'factual_text', chunk_index)
-                                chunk_index += 1
-                                
-                                chunk = {
-                                    'chunk_id': chunk_id,
-                                    'scheme_name': scheme_name,
-                                    'section': 'factual_text',
-                                    'text': block_chunk,
-                                    'source_url': source_url,
-                                    'last_scraped_at': last_scraped_at
-                                }
-                                chunks.append(chunk)
-                    else:
-                        # Use block as single chunk
-                        chunk_id = generate_chunk_id(scheme_name, 'factual_text', chunk_index)
-                        chunk_index += 1
-                        
-                        chunk = {
-                            'chunk_id': chunk_id,
-                            'scheme_name': scheme_name,
-                            'section': 'factual_text',
-                            'text': block_text,
-                            'source_url': source_url,
-                            'last_scraped_at': last_scraped_at
-                        }
-                        chunks.append(chunk)
-    
-    # Step 3: Process remaining text_clean (after removing section content)
-    remaining_text = remove_section_text_from_clean_text(text_clean, sections)
-    remaining_text = clean_repetition(remaining_text)
-    remaining_text = normalize_whitespace(remaining_text)
-    
-    # Only chunk if there's substantial remaining text
-    if remaining_text and len(remaining_text) >= 50:
-        estimated_tokens = estimate_tokens(remaining_text)
-        
-        # Chunk text_clean into 150-300 token chunks
-        if estimated_tokens > 150:  # Only chunk if substantial
-            text_chunks = chunk_text_by_tokens(remaining_text, min_tokens=150, max_tokens=300)
-            
-            for text_chunk in text_chunks:
-                if text_chunk and text_chunk.strip():
-                    text_chunk = clean_repetition(text_chunk)
-                    text_chunk = normalize_whitespace(text_chunk)
-                    
-                    # Skip chunks that are too short
-                    if len(text_chunk) < 20:
-                        continue
-                    
-                    chunk_id = generate_chunk_id(scheme_name, None, chunk_index)
-                    chunk_index += 1
-                    
-                    chunk = {
-                        'chunk_id': chunk_id,
-                        'scheme_name': scheme_name,
-                        'section': None,  # No specific section for text_clean chunks
-                        'text': text_chunk,
-                        'source_url': source_url,
-                        'last_scraped_at': last_scraped_at
-                    }
-                    
-                    chunks.append(chunk)
-        elif estimated_tokens >= 50:  # Use as single chunk if substantial but < 150 tokens
+    for text in chunk_texts:
+        if text and len(text) >= 20:  # Skip very short chunks
             chunk_id = generate_chunk_id(scheme_name, None, chunk_index)
             chunk_index += 1
             
             chunk = {
                 'chunk_id': chunk_id,
                 'scheme_name': scheme_name,
-                'section': None,
-                'text': remaining_text,
+                'section': 'structured_data',
+                'text': text,
                 'source_url': source_url,
                 'last_scraped_at': last_scraped_at
             }

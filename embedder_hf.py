@@ -28,7 +28,7 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # Free, 384 dimensio
 # Alternative options:
 # "sentence-transformers/all-mpnet-base-v2"  # Better quality, 768 dimensions
 # "sentence-transformers/all-MiniLM-L12-v2"  # 384 dimensions, better than L6
-HF_API_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction"
+HF_API_URL = "https://router.huggingface.co/hf-inference/pipeline/feature-extraction"
 BATCH_SIZE = 32  # HF API can handle batches
 
 # Embedding dimension (varies by model)
@@ -107,7 +107,7 @@ def create_embeddings_hf(texts: List[str], model: str = EMBEDDING_MODEL, api_tok
         headers["Authorization"] = f"Bearer {api_token}"
     
     # Prepare request
-    api_url = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{model}"
+    api_url = f"https://router.huggingface.co/hf-inference/pipeline/feature-extraction/{model}"
     
     # HF API can handle single or multiple inputs
     payload = {"inputs": texts if len(texts) > 1 else texts[0]}
