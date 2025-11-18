@@ -1,35 +1,179 @@
 # Mutual Fund Facts-Only Assistant
 
-Lightweight Retrieval-Augmented Generation (RAG) assistant focused on factual mutual fund FAQs (expense ratios, SIP minimums, exit loads, etc.) sourced from official AMC / SEBI / AMFI pages. The backend exposes a FastAPI `/ask` endpoint and serves a minimal browser UI for quick Q&A with citations.
+A lightweight Retrieval-Augmented Generation (RAG) chatbot that answers factual questions about mutual funds using data sourced from official AMC/SEBI/AMFI pages. The system extracts structured data, generates embeddings, and provides accurate, citation-backed answers through a FastAPI backend with an interactive web interface.
+
+## Features
+
+- **Factual Accuracy**: All information sourced directly from official mutual fund websites
+- **Fast Responses**: Embedding-based semantic search for quick retrieval
+- **Citation Support**: Each answer includes source URLs and last-updated timestamps
+- **No Investment Advice**: Strictly facts-only, no recommendations or opinions
+- **Extensible Design**: Easy to add more funds or data sources
+
+## Tech Stack
+
+- **Python** - Core programming language
+- **FastAPI** - High-performance web framework
+- **Google Gemini API** - Embeddings and text generation
+- **BeautifulSoup** - Web scraping
+- **NumPy** - Numerical computations
+- **Streamlit** - Alternative frontend option
+
+## Project Structure
+
+```
+├── app.py                 # FastAPI backend with /ask endpoint
+├── rag_backend_simple.py  # RAG implementation with Gemini
+├── scraper.py             # Web scraper for mutual fund data
+├── chunker.py             # Data processing and chunking
+├── embedder_gemini_simple.py # Embedding generation
+├── data/
+│   ├── embeddings.json    # Pre-generated vector embeddings
+│   ├── processed_chunks.jsonl # Structured data chunks
+│   └── raw_scheme_pages.jsonl # Raw scraped data
+└── requirements.txt       # Python dependencies
+```
 
 ## Installation
 
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd <repository-directory>
+```
+
+2. Create a virtual environment:
 ```bash
 python -m venv .venv
-.venv\Scripts\activate            # PowerShell / cmd on Windows
+```
+
+3. Activate the virtual environment:
+```bash
+# On Windows
+.venv\Scripts\activate
+
+# On Linux/Mac
+source .venv/bin/activate
+```
+
+4. Install dependencies:
+```bash
 pip install -r requirements.txt
 ```
 
-Ensure you have the pre-generated embeddings under `data/` (already included for Milestone‑1).
+## Running the Application
 
-## Running the backend
+### Option 1: FastAPI Backend with Web UI (Recommended)
 
+Start the FastAPI server:
 ```bash
-.\.venv\Scripts\python.exe -m uvicorn app:app --reload --port 8000
+python app.py
 ```
 
-The server provides:
-
-- `POST /ask` – returns a concise factual answer, source URL, and last-updated timestamp  
-- `GET /health` – lightweight readiness probe  
-- `GET /docs` – interactive Swagger UI for manual testing
-
-## Using the frontend
-
-The FastAPI service also serves a built-in chat page. After the backend is running, open:
-
+Access the chat interface at:
 ```
 http://127.0.0.1:8000/
 ```
 
-Type one of the suggested prompts (e.g., “What is the expense ratio of HDFC Flexi Cap?”) to see a citation-backed response in real time. If you prefer using the API directly, you can hit `http://127.0.0.1:8000/docs` and invoke `/ask` from the Swagger interface.
+### Option 2: Streamlit Frontend
+
+```bash
+streamlit run frontend_app.py
+```
+
+### Option 3: Direct RAG Backend
+
+```bash
+python rag_backend_simple.py
+```
+
+## API Usage
+
+The FastAPI backend provides the following endpoints:
+
+- `POST /ask` - Ask a mutual fund question
+  ```bash
+  curl -X POST http://localhost:8000/ask \
+    -H "Content-Type: application/json" \
+    -d '{"question": "What is the expense ratio of HDFC Flexi Cap Fund?"}'
+  ```
+
+- `GET /health` - Health check endpoint
+- `GET /docs` - Interactive Swagger UI for API testing
+
+## How the RAG System Works
+
+1. **Data Extraction**: Web scraper collects structured data from mutual fund websites
+2. **Chunking**: Data is organized into logical chunks for efficient retrieval
+3. **Embedding**: Each chunk is converted to a numerical vector using Google Gemini API
+4. **Storage**: Embeddings and metadata are stored in `data/embeddings.json`
+5. **Search**: User questions are matched to relevant chunks using cosine similarity
+6. **Generation**: Gemini generates natural language answers using retrieved context
+
+## Updating Documents/Embeddings
+
+To update the mutual fund data:
+
+1. Run the scraper to collect fresh data:
+```bash
+python scraper.py
+```
+
+2. Process the data into chunks:
+```bash
+python chunker.py
+```
+
+3. Generate new embeddings:
+```bash
+python embedder_gemini_simple.py
+```
+
+The system will automatically use the updated embeddings on next restart.
+
+## Free API Options
+
+### Google Gemini (Recommended)
+- Get a free API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+- Set the environment variable:
+  ```bash
+  export GEMINI_API_KEY=your-api-key-here
+  ```
+
+### Hugging Face (Alternative)
+- No API key required for basic usage
+- For higher rate limits, get a free token at [Hugging Face](https://huggingface.co/settings/tokens)
+
+## Deployment
+
+1. Ensure all dependencies are installed
+2. Set required environment variables (API keys)
+3. Run the FastAPI application:
+```bash
+python app.py
+```
+
+4. For production deployment, use a process manager like Gunicorn:
+```bash
+pip install gunicorn
+gunicorn -w 4 -k uvicorn.workers.UvicornWorker app:app --bind 0.0.0.0:8000
+```
+
+## Environment Variables
+
+- `GEMINI_API_KEY` - Google Gemini API key (required for embeddings and generation)
+- `HUGGINGFACE_API_TOKEN` - Hugging Face token (optional, for higher rate limits)
+
+## Example Questions
+
+- "What is the expense ratio of HDFC Flexi Cap Fund?"
+- "What is the minimum SIP amount for HDFC Mid Cap Fund?"
+- "What is the exit load for HDFC Small Cap Fund?"
+- "Who manages the HDFC Large Cap Fund?"
+- "What is the risk level of HDFC Balanced Advantage Fund?"
+
+## Limitations
+
+- Rate limits on free API tiers may affect response times
+- Data is limited to the information available on scraped websites
+- NAV data may not be available on main fund pages (website limitation, not system limitation)

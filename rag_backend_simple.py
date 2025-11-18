@@ -6,6 +6,7 @@ Answers questions using mutual fund FAQ data
 import json
 import logging
 import numpy as np
+import re
 from typing import List, Dict, Tuple
 from pathlib import Path
 import google.generativeai as genai
@@ -87,15 +88,63 @@ class MutualFundRAG:
             logger.error(f"Error finding relevant chunks: {e}")
             return []
     
+    def clean_context(self, text: str) -> str:
+        """Clean and format context text for better readability."""
+        # normalize whitespace
+        text = re.sub(r"\s+", " ", text)
+        # add line breaks before important fields so the model can see them clearly
+        for field in [
+            "Fund Manager", "Fund Managers", "TER", "Expense Ratio",
+            "Inception Date", "AUM", "Benchmark", "Exit Load",
+            "Minimum SIP", "Objective", "Category", "Riskometer"
+        ]:
+            text = text.replace(field + ":", f"\n{field}:")
+            text = text.replace(field + " :", f"\n{field}:")
+        return text.strip()
+    
     def generate_answer(self, query: str, context_chunks: List[str]) -> str:
         """Generate answer using Gemini with provided context."""
+        # Create prompt
+        prompt = ""
         try:
+            # Prefer chunks that look relevant to the query and key fields
+            keywords = [
+                query.lower(),
+                "fund manager",
+                "fund managers",
+                "manager",
+                "riskometer",
+                "aum",
+                "expense ratio",
+                "ter",
+                "exit load",
+            ]
+            filtered_chunks = []
+            for chunk in context_chunks:
+                lower = chunk.lower()
+                if any(k in lower for k in keywords if k):
+                    filtered_chunks.append(chunk)
+            
+            if not filtered_chunks:
+                filtered_chunks = context_chunks[:1]  # fall back to top chunk
+            
             # Prepare context
-            context = "\n\n".join(context_chunks)
+            context = "\n\n".join(self.clean_context(c) for c in filtered_chunks)
             
             # Create prompt
             prompt = f"""
-You are a helpful assistant answering questions about mutual funds. Use the following context to answer the question accurately. If the context doesn't contain relevant information, say so.
+            You are Mutual Fund Facts-Only Assistant.
+
+            RULES:
+            - Use ONLY the facts in the context.
+            - NEVER give investment advice, opinions, or recommendations.
+            - Answer ONLY what the user specifically asks for.
+            - If the user asks "should I invest", "is this good/bad", "which is better", or anything advice-like:
+              - Say you cannot give investment advice.
+            - If a fact is missing in context, say "This detail is not available in the context."
+            - Keep answers concise and well-formatted.
+            - Always end with:  Source: <source link if present in context>
+            - Include Category and Riskometer only if relevant to the query.
 
 Context:
 {context}
@@ -110,6 +159,13 @@ Answer:"""
             
         except Exception as e:
             logger.error(f"Error generating answer: {e}")
+            # Check for specific error types to provide better user feedback
+            error_msg = str(e).lower()
+            if "429" in error_msg or "resource exhausted" in error_msg:
+                return "Sorry, the AI service is currently busy. Please wait a moment and try again."
+            logger.error(f"Prompt that caused error: {prompt}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return "Sorry, I encountered an error while generating the answer."
     
     def ask(self, question: str, top_k: int = 3) -> str:
