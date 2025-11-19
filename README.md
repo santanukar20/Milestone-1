@@ -156,18 +156,36 @@ The system will automatically use the updated embeddings on next restart.
 
 ## Deployment
 
-1. Ensure all dependencies are installed
-2. Set required environment variables (API keys)
-3. Run the FastAPI application:
+The application is currently deployed on Render and can be accessed at: [https://mf-facts-bot.onrender.com/](https://mf-facts-bot.onrender.com/)
+
+### Render Deployment Configuration
+
+1. **Build Command**: `pip install -r requirements.txt`
+2. **Start Command**: `uvicorn app:app --host 0.0.0.0 --port $PORT`
+3. **Environment Variables**: Set `GEMINI_API_KEY` in Render dashboard
+4. **Region**: Choose a region closest to your users
+5. **Auto-Deploy**: Enable auto-deployment from GitHub for automatic updates
+
+### Accessing the Deployed Application
+
+Once deployed, you can access:
+- **Chat Interface**: [https://mf-facts-bot.onrender.com/](https://mf-facts-bot.onrender.com/)
+- **API Documentation**: [https://mf-facts-bot.onrender.com/docs](https://mf-facts-bot.onrender.com/docs)
+- **Health Check**: [https://mf-facts-bot.onrender.com/health](https://mf-facts-bot.onrender.com/health)
+
+### Local Development vs Production
+
+For local development, use:
 ```bash
 python app.py
 ```
 
-4. For production deployment, use a process manager like Gunicorn:
+For production deployment on Render, the platform automatically uses:
 ```bash
-pip install gunicorn
-gunicorn -w 4 -k uvicorn.workers.UvicornWorker app:app --bind 0.0.0.0:8000
+uvicorn app:app --host 0.0.0.0 --port $PORT
 ```
+
+The `$PORT` environment variable is automatically provided by Render.
 
 ## Environment Variables
 
