@@ -110,6 +110,16 @@ The FastAPI backend provides the following endpoints:
 5. **Search**: User questions are matched to relevant chunks using cosine similarity
 6. **Generation**: Gemini generates natural language answers using retrieved context
 
+## Data Sources
+
+The chatbot currently uses data scraped from the following HDFC Mutual Fund pages:
+
+- [HDFC Flexi Cap Fund](https://www.hdfcfund.com/explore/mutual-funds/hdfc-flexi-cap-fund/direct)
+- [HDFC Balanced Advantage Fund](https://www.hdfcfund.com/explore/mutual-funds/hdfc-balanced-advantage-fund/direct)
+- [HDFC Large Cap Fund](https://www.hdfcfund.com/explore/mutual-funds/hdfc-large-cap-fund/direct)
+- [HDFC Mid Cap Fund](https://www.hdfcfund.com/explore/mutual-funds/hdfc-mid-cap-fund/direct)
+- [HDFC Small Cap Fund](https://www.hdfcfund.com/explore/mutual-funds/hdfc-small-cap-fund/direct)
+
 ## Updating Documents/Embeddings
 
 To update the mutual fund data:
@@ -177,3 +187,16 @@ gunicorn -w 4 -k uvicorn.workers.UvicornWorker app:app --bind 0.0.0.0:8000
 - Rate limits on free API tiers may affect response times
 - Data is limited to the information available on scraped websites
 - NAV data may not be available on main fund pages (website limitation, not system limitation)
+
+## Future Improvements
+
+1. **Expand Data Sources**: Add support for more mutual fund companies beyond HDFC
+2. **Real-time NAV Updates**: Implement direct API integration for real-time NAV data
+3. **Multi-language Support**: Add support for regional languages to reach wider audience
+4. **Enhanced UI/UX**: Improve the chat interface with better styling and user experience
+5. **Voice Input**: Add voice-to-text capability for hands-free querying
+6. **Caching Mechanism**: Implement caching for frequently asked questions to reduce API usage
+7. **Advanced Analytics**: Add usage analytics to understand common user queries
+8. **Mobile App**: Develop a dedicated mobile application for better accessibility
+9. **Personalization**: Add user profiles to track frequently asked funds
+10. **Offline Mode**: Implement offline functionality for basic queries
